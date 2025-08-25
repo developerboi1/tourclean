@@ -1,0 +1,8 @@
+# Root ignore
+.env
+.local/
+node_modules/
+dist/
+uploads/
+*.log
+.replit
