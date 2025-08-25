@@ -1,0 +1,195 @@
+1) MVP scope (by role)
+
+Tourist
+
+Sign up/login (email, social, OTP).
+
+Profile + wallet balance.
+
+Upload video (with auto metadata: GPS, timestamp, duration, device hash).
+
+See submission status (Queued → Auto‑Verified → Human‑Review → Approved/Rejected).
+
+Cash‑out request (balance → payout method).
+
+Notifications (push/email/SMS) for decisions & payouts.
+
+Moderator Admin
+
+Review queue with video player, map, metadata, auto‑checks.
+
+Approve/Reject with reason; override auto‑decision.
+
+Fraud tools: duplicate‑video hash match, GPS radius check vs bin locations, rate limits, user flags.
+
+Audit log of actions.
+
+Payment / Finance
+
+Trigger payouts from approved cash‑out requests.
+
+View payout statuses (Initiated → Success/Failed/Needs‑Info).
+
+Reconcile via gateway webhooks.
+
+City Council
+
+Read‑only dashboards & exports: participation, verified submissions by area/time, payout totals, cost per kg/item (if tracked).
+
+2) System architecture (recommended)
+
+Frontend: Next.js (React), TypeScript, Tailwind.
+
+Backend API: Node.js (NestJS) or Python (FastAPI).
+
+DB: PostgreSQL (row‑level security + audit).
+
+Object storage: S3 (videos, thumbnails).
+
+Processing: Worker queue (BullMQ/RabbitMQ). Jobs: upload ingest, FFmpeg transcode, thumbnail, perceptual hash, GPS validation, ML checks.
+
+Caching/Queues: Redis.
+
+Payments: Stripe/PayPal Payouts (connect accounts or recipient tokens) + webhook handler.
+
+Maps: OpenStreetMap/Mapbox for bin locations & radius checks.
+
+Auth: JWT + Refresh tokens (or Clerk/Auth0).
+
+Observability: Sentry + structured logs + metrics (Prometheus/Grafana).
+
+3) Data model (core tables)
+
+users(id, email, name, role: tourist|moderator|council, kyc_status, created_at)
+
+user_wallets(user_id, points_balance, cash_balance, locked_amount)
+
+bin_locations(id, name, lat, lng, radius_m, active)
+
+video_submissions(id, user_id, s3_key, thumb_key, duration_s, size_bytes, device_hash, gps_lat, gps_lng, recorded_at, bin_id_guess, auto_score, status: queued|auto_verified|needs_review|approved|rejected, rejection_reason, created_at)
+
+submission_events(id, submission_id, actor_id, event_type, meta, created_at) // audit trail
+
+cashout_requests(id, user_id, points_used, cash_amount, method, destination_ref, status: pending|initiated|succeeded|failed|canceled, failure_reason, created_at)
+
+payout_transactions(id, cashout_request_id, gateway, gateway_txn_id, status, raw_webhook_json, created_at, updated_at)
+
+reports_cache(id, key, json, generated_at)
+
+4) Key workflows
+
+A) Submission
+
+Tourist uploads → pre‑signed S3 → POST /submissions.
+
+Worker: transcode + thumbnail + perceptual hash (dupe detection).
+
+Validate GPS within bin_locations radius & timestamp not in future; run basic ML/liveness checks (optional).
+
+If high auto‑score → auto_verified; else → needs_review.
+
+On approved → credit points to wallet; on rejected → store reason & notify.
+
+B) Cash‑Out
+
+Tourist requests cash‑out → lock points; compute $ (configurable rate).
+
+Create cashout_requests + payout_transactions (initiated).
+
+Call payment gateway payout API.
+
+Handle webhook → update status; on success unlock→debit, on fail → refund points; notify.
+
+C) Moderation
+
+Queue sorted by risk score, age.
+
+One‑click Approve/Reject with reason; map + video + hashes shown.
+
+Escalation tags; ban/suspend users if pattern of abuse.
+
+D) Reporting
+
+Prebuilt dashboards:
+
+Verified submissions by day & location heatmap.
+
+Approval rate, average processing time.
+
+Total points credited, payouts issued, breakouts by ward/zone.
+
+CSV export and scheduled email to council.
+
+5) API (minimal, example)
+
+Public (auth required)
+
+POST /auth/:provider/callback
+
+GET /me – profile & wallet.
+
+POST /submissions – create (body: s3_key, gps, recorded_at, device_hash).
+
+GET /submissions?status= – list mine.
+
+POST /cashouts – create (points, method, destination_ref).
+
+GET /cashouts – list mine.
+
+Admin
+
+GET /admin/submissions?status=needs_review – queue.
+
+POST /admin/submissions/:id/approve
+
+POST /admin/submissions/:id/reject (reason)
+
+GET /admin/cashouts?status=pending
+
+POST /admin/cashouts/:id/initiate (if manual)
+
+GET /admin/reports/summary?from=&to=
+
+Integrations
+
+POST /webhooks/payments – payout status.
+
+POST /webhooks/storage – (optional) upload complete.
+
+6) Rules & scoring (start simple)
+
+Geo rule: within bin.radius_m of a known bin.
+
+Time rule: recorded_at within last N hours of upload.
+
+Length rule: min video duration (e.g., ≥10s).
+
+Dupes: reject if perceptual hash distance < threshold to user’s last K videos (or any global dupes).
+
+Rate limit: max M submissions per day per user.
+
+Score: weighted sum → auto‑approve if ≥ τ_high; human review if between τ_low and τ_high; auto‑reject if < τ_low.
+
+7) Security & compliance
+
+Signed URLs for uploads, virus scan (ClamAV) on ingest.
+
+PII minimization; encrypt wallet & payout dest. at rest.
+
+Role‑based access; audit logs for all admin actions.
+
+GDPR/consent for location & camera use.
+
+Webhook signature verification; idempotency keys.
+
+Graceful retry & dead‑letter queue for jobs.
+
+8) Delivery plan (8–10 weeks)
+
+Week 1–2: Auth, DB, S3 upload, basic UI skeleton.
+Week 3–4: Submission pipeline (transcode, GPS checks, hashes), user dashboard.
+Week 5: Moderation queue & decisions, points crediting.
+Week 6: Cash‑out flow, gateway integration, webhooks.
+Week 7: Dashboards & exports, notifications.
+Week 8: Hardening: rate limits, audits, error budgets, E2E tests.
+Stretch: ML/liveness, mobile PWA polish, KYC for high‑value payouts.
